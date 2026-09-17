@@ -1,62 +1,30 @@
 import os
-from PIL import Image
-import numpy as np
-from multiprocessing import Pool, Manager
-from io import BytesIO
 
-def is_valid_png(data):
-    """使用 Pillow 判断文件是否是有效的 PNG 文件"""
-    try:
-        img = Image.open(BytesIO(data))
-        img.verify()
-        return True
-    except (IOError, SyntaxError):
-        return False
+def decrypt_gc_png(data: bytearray) -> bytes:
+    file_len = len(data)
+    if file_len < 3:
+        return bytes(data)
 
-def try_decrypt(encrypted_data, candidate_index):
-    """尝试用给定的候选位置解密"""
-    encrypted_data = np.array(list(encrypted_data), dtype=np.uint8)
-    encrypted_data[1], encrypted_data[2] = encrypted_data[2], encrypted_data[1]
-    decrypted_data = np.delete(encrypted_data, candidate_index)
+    # 1. 恢复文件头 (交换 index 1 和 2)
+    data[1], data[2] = data[2], data[1]
 
-    return bytes(decrypted_data)
+    # 2. 计算正中间脏字节的位置
+    fake_byte_pos = (file_len - 1) // 2
 
-def brute_force_single_decrypt(args):
-    """每个进程解密单个候选位置"""
-    encrypted_data, candidate_index, result = args
+    # 3. 剔除脏字节
+    return bytes(data[:fake_byte_pos] + data[fake_byte_pos + 1:])
 
-    decrypted_data = try_decrypt(encrypted_data, candidate_index)
-    
-    if is_valid_png(decrypted_data):
-        result.put(decrypted_data)
-        return candidate_index
 
-    return None
-
-def brute_force_decrypt_png(input_file_path, output_file_path):
-    """穷举解密 PNG 文件"""
+def decrypt_png(input_file_path: str, output_file_path: str) -> None:
     with open(input_file_path, 'rb') as encrypted_file:
         encrypted_data = encrypted_file.read()
 
-    ones_indices = [i for i, byte in enumerate(encrypted_data) if byte == 1]
-    print(f"找到 {len(ones_indices)} 个候选的 `1` 字节位置，开始尝试解密...")
+    decrypted_data = decrypt_gc_png(bytearray(encrypted_data))
 
-    with Manager() as manager:
-        result = manager.Queue()
+    with open(output_file_path, 'wb') as output_file:
+        output_file.write(bytes(decrypted_data))
 
-        with Pool(processes=os.cpu_count()) as pool:
-            results = pool.map(brute_force_single_decrypt, [(encrypted_data, index, result) for index in ones_indices])
-
-        while not result.empty():
-            decrypted_data = result.get()
-            with open(output_file_path, 'wb') as output_file:
-                output_file.write(decrypted_data)
-            print(f"解密成功，文件已保存至 {output_file_path}")
-            return
-
-    print("未能成功解密 PNG 文件，请检查文件或加密算法。")
-
-def decrypt_all_png_in_folder(folder_path, output_folder):
+def decrypt_all_png_in_folder(folder_path: str, output_folder: str) -> None:
     """遍历文件夹中的所有 PNG 文件并进行解密"""
     png_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.png')]
     
@@ -66,7 +34,7 @@ def decrypt_all_png_in_folder(folder_path, output_folder):
         input_file = os.path.join(folder_path, png_file)
         output_file = os.path.join(output_folder, f"decrypted_{png_file}")
         print(f"开始解密文件: {input_file}")
-        brute_force_decrypt_png(input_file, output_file)
+        decrypt_png(input_file, output_file)
         print(f"解密完成: {output_file}")
 
 if __name__ == '__main__':
